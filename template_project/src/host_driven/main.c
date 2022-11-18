@@ -35,6 +35,7 @@
 #include <tvm/runtime/crt/logging.h>
 #include <tvm/runtime/crt/microtvm_rpc_server.h>
 #include <tvm/runtime/crt/page_allocator.h>
+#include <tvm/runtime/crt/graph_executor_module.h>
 #include <unistd.h>
 
 #include "freertos/FreeRTOS.h"
@@ -76,6 +77,8 @@ static size_t g_num_bytes_in_rx_buffer = 0;
 #define EX_UART_NUM UART_NUM_0
 
 #define RING_BUF_SIZE_BYTES (TVM_CRT_MAX_PACKET_SIZE_BYTES + 100)
+#define CONFIG_GRAPH_EXECUTOR_MODULE
+
 static RingbufHandle_t buf_handle;
 
 #define BUF_SIZE (1024)
@@ -357,6 +360,10 @@ void app_main(void) {
   // and execute them.
   microtvm_rpc_server_t server = MicroTVMRpcServerInit(write_serial, NULL);
   TVMLogf("microTVM ESPIDF runtime - running\n");
+#ifdef CONFIG_GRAPH_EXECUTOR_MODULE
+  CHECK_EQ(TVMGraphExecutorModule_Register(), kTvmErrorNoError,
+           "failed to register GraphExecutor TVMModule");
+#endif
 
   // The main application loop. We continuously read commands from the UART
   // and dispatch them to MicroTVMRpcServerLoop().
