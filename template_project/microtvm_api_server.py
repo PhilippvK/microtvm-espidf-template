@@ -69,7 +69,7 @@ BOARDS = API_SERVER_DIR / "boards.json"
 # We only check two levels of the version.
 ESPIDF_VERSION = 4.4
 
-IDF_CMD = default = "idf.py"
+IDF_CMD = "idf.py"
 
 IDF_PATH = os.getenv("IDF_PATH")
 IDF_TOOLS_PATH = os.getenv("IDF_TOOLS_PATH")
@@ -537,14 +537,31 @@ class EspidfSerialTransport:
 
     def open(self):
         port_path = self._find_serial_port(self._options)
+        high = False
+        low = True
         self._port = serial.Serial(port_path, baudrate=self._lookup_baud_rate(self._options))
+        # ser = serial.Serial(port, baud)
+        self._port.close()
+        self._port.dtr = False
+        self._port.rts = False
+        time.sleep(1)
+        self._port.dtr = low
+        self._port.rts = high
+        self._port.dtr = self._port.dtr
+        self._port.open()
+        self._port.dtr = high
+        self._port.rts = low
+        self._port.dtr = self._port.dtr
+        time.sleep(0.002)
+        self._port.rts = high
+        self._port.dtr = self._port.dtr
         return server.TransportTimeouts(
-            session_start_retry_timeout_sec=2.0,
-            # session_start_retry_timeout_sec=2.0 * 3,
-            session_start_timeout_sec=5.0,
-            # session_start_timeout_sec=5.0 * 3,
-            session_established_timeout_sec=5.0,
-            # session_established_timeout_sec=5.0 * 3,
+            # session_start_retry_timeout_sec=2.0,
+            session_start_retry_timeout_sec=2.0 * 3,
+            # session_start_timeout_sec=5.0,
+            session_start_timeout_sec=5.0 * 3,
+            # session_established_timeout_sec=5.0,
+            session_established_timeout_sec=5.0 * 15,
         )
 
     def close(self):
