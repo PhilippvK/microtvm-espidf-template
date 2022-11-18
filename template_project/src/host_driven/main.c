@@ -76,9 +76,10 @@ static size_t g_num_bytes_in_rx_buffer = 0;
 
 #define EX_UART_NUM UART_NUM_0
 
-#define RING_BUF_SIZE_BYTES (TVM_CRT_MAX_PACKET_SIZE_BYTES + 100)
 #define CONFIG_GRAPH_EXECUTOR_MODULE
 
+// #define RING_BUF_SIZE_BYTES (TVM_CRT_MAX_PACKET_SIZE_BYTES + 100)
+#define RING_BUF_SIZE_BYTES (TVM_CRT_MAX_PACKET_SIZE_BYTES + 40000)
 static RingbufHandle_t buf_handle;
 
 #define BUF_SIZE (1024)
