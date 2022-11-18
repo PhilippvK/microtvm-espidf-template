@@ -111,7 +111,7 @@ size_t TVMPlatformFormatMessage(char* out_buf, size_t out_buf_size_bytes,
 // Called by TVM when an internal invariant is violated, and execution cannot
 // continue.
 void TVMPlatformAbort(tvm_crt_error_t error) {
-  TVMLogf("TVMPlatformAbort: CALL\n");
+  TVMLogf("TVMPlatformAbort: err=%d\n", error);
 #ifdef CONFIG_LED_PIN_RED
   gpio_set_level(CONFIG_LED_PIN_RED, 1);
 #endif
@@ -121,7 +121,11 @@ void TVMPlatformAbort(tvm_crt_error_t error) {
 #ifdef CONFIG_LED_PIN_BLUE
   gpio_set_level(CONFIG_LED_PIN_BLUE, 1);
 #endif
-  for (;;) vTaskDelay(1000);
+  // for (;;) vTaskDelay(1000);
+  vTaskDelay(1000);
+  printf("Restarting now.\n");
+  fflush(stdout);
+  esp_restart();
 }
 
 // Called by TVM to generate random data.
