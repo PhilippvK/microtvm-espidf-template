@@ -51,8 +51,7 @@ from tvm.micro.project_api import server
 _LOG = logging.getLogger(__name__)
 
 
-API_SERVER_DIR = pathlib.Path(os.path.dirname(__file__) or os.path.getcwd())
-
+API_SERVER_DIR = pathlib.Path(os.path.dirname(__file__))
 
 BUILD_DIR = API_SERVER_DIR / "build"
 
@@ -70,9 +69,6 @@ BOARDS = API_SERVER_DIR / "boards.json"
 ESPIDF_VERSION = 4.4
 
 IDF_CMD = "idf.py"
-
-IDF_PATH = os.getenv("IDF_PATH")
-IDF_TOOLS_PATH = os.getenv("IDF_TOOLS_PATH")
 
 # Data structure to hold the information microtvm_api_server.py needs
 # to communicate with each of these boards.
@@ -151,31 +147,6 @@ class BoardAutodetectFailed(Exception):
     """Raised when no attached hardware is found matching the board= given to ZephyrCompiler."""
 
 
-# def _get_flash_runner():
-#     flash_runner = CMAKE_CACHE.get("ZEPHYR_BOARD_FLASH_RUNNER")
-#     if flash_runner is not None:
-#         return flash_runner
-#
-#     with open(CMAKE_CACHE["ZEPHYR_RUNNERS_YAML"]) as f:
-#         doc = yaml.load(f, Loader=yaml.FullLoader)
-#     return doc["flash-runner"]
-
-
-# def _get_device_args(options):
-#     flash_runner = _get_flash_runner()
-#
-#     if flash_runner == "nrfjprog":
-#         return _get_nrf_device_args(options)
-#
-#     if flash_runner == "openocd":
-#         return _get_openocd_device_args(options)
-#
-#     raise BoardError(
-#         f"Don't know how to find serial terminal for board {CMAKE_CACHE['BOARD']} with flash "
-#         f"runner {flash_runner}"
-#     )
-
-
 def generic_find_serial_port(serial_number=None):
     """Find a USB serial port based on its serial number or its VID:PID.
 
@@ -204,7 +175,9 @@ def generic_find_serial_port(serial_number=None):
 
     # Workaround on MacOS
     if len(serial_ports) > 0:
-        serial_ports = list(filter(lambda x: "wch" not in x.name and "SLAB" not in x.name, serial_ports))
+        serial_ports = list(
+            filter(lambda x: "wch" not in x.name and "SLAB" not in x.name, serial_ports)
+        )
 
     if len(serial_ports) == 0:
         raise Exception(f"No serial port found for board {prop['board']}!")
@@ -246,32 +219,6 @@ PROJECT_OPTIONS = [
         type="bool",
         help="Run build with verbose output.",
     ),
-    # server.ProjectOption(
-    #     "idf_cmd",
-    #     optional=["build"],
-    #     default=IDF_CMD,
-    #     type="str",
-    #     help=(
-    #         "Path to the idf.py tool. If given, supersedes both the idf_path/idf_tools_path "  # TODO(@PhilippvK)
-    #         "option and IDF_PATH/IDF_TOOLS_PATH environment variable."
-    #     ),
-    # ),
-    server.ProjectOption(
-        "idf_path",
-        required=(["generate_project", "open_transport"] if not IDF_PATH else None),
-        optional=(["generate_project", "open_transport", "build"] if IDF_PATH else ["build"]),
-        default=IDF_PATH,
-        type="str",
-        help="Path to the ESP-IDF clone directory.",
-    ),
-    server.ProjectOption(
-        "idf_tools_path",
-        required=(["generate_project", "open_transport"] if not IDF_TOOLS_PATH else None),
-        optional=(["generate_project", "open_transport", "build"] if IDF_TOOLS_PATH else ["build"]),
-        default=IDF_TOOLS_PATH,
-        type="str",
-        help="Path to the ESP-IDF install directory.",
-    ),
     server.ProjectOption(
         "idf_target",
         required=["generate_project", "build", "flash", "open_transport"],
@@ -300,26 +247,18 @@ PROJECT_OPTIONS = [
         help="Treat warnings as errors and raise an Exception.",
     ),
     server.ProjectOption(
-        "compile_definitions",
+        "num_classes",
         optional=["generate_project"],
-        type="str",
-        help="Extra definitions added project compile.",
+        default=4,
+        type="int",
+        help="Nunber of labels (including silence & unknown) if project_type is 'micro_kws'",
     ),
 ]
 
 
-def get_idf_path(options: dict):
-    """Returns ESP-IDF base path"""
-    idf_path = options.get("idf_path", IDF_PATH)
-    assert idf_path, "'idf_path' option not passed and not found by default!"
-    return idf_path
-
-
-def get_idf_tools_path(options: dict):
-    """Returns ESP-IDF install path"""
-    idf_tools_path = options.get("idf_tools_path", IDF_TOOLS_PATH)
-    assert idf_tools_path, "'idf_tools_path' option not passed and not found by default!"
-    return idf_tools_path
+def check_idf():
+    if shutil.which(IDF_CMD) is None:
+        raise RuntimeError("idf.exe not found. Please setup ESP-IDF first in you terminal session.")
 
 
 class Handler(server.ProjectAPIHandler):
@@ -337,53 +276,37 @@ class Handler(server.ProjectAPIHandler):
             project_options=PROJECT_OPTIONS,
         )
 
-    # These files and directories will be recursively copied into generated projects from the CRT.
-    CRT_COPY_ITEMS = ("include", "Makefile", "src")  # TODO(@PhilippvK)
-
     # Creates extra lines added to sdkconfig.defaults file
-    EXTRA_PRJ_CONF_DIRECTIVES = {
-        # "CONFIG_TIMER_RANDOM_GENERATOR=y": (
-        #     "qemu_x86",
-        #     "qemu_riscv32",
-        #     "qemu_cortex_r5",
-        #     "qemu_riscv64",
-        # ),
-        # "CONFIG_ENTROPY_GENERATOR=y": (
-        #     "mps2_an521",
-        #     "nrf5340dk_nrf5340_cpuapp",
-        #     "nucleo_f746zg",
-        #     "nucleo_l4r5zi",
-        #     "stm32f746g_disco",
-        # ),
-    }
+    EXTRA_PRJ_CONF_DIRECTIVES = {}
 
     def _create_prj_conf(self, project_dir, options):
-        with open(project_dir / "sdkconfig.defaults", "w") as f:
+        dest = project_dir / "sdkconfig.defaults"
+        mode = "a" if dest.is_file() else "w"
+        with open(dest, mode) as f:
             # f.write("# For math routines\n" "CONFIG_NEWLIB_LIBC=y\n" "\n")
-            f.write("CONFIG_ESP_TASK_WDT=n\n")
-            f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
-            f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
+            project_type = options["project_type"]
+            f.write("\n# Project specific sdkconfig.defaults directives\n")
+            if project_type == "host_driven":
+                f.write("CONFIG_ESP_TASK_WDT=n\n")
+                f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
+                f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
+            elif project_type == "micro_kws":
+                classes = options.get("num_classes", 4)
+                f.write(f"CONFIG_MICRO_KWS_NUM_CLASSES={classes}\n")
 
-            f.write("\n# Extra sdkconfig.defaults directives\n")
+            f.write("\n# Board specific sdkconfig.defaults directives\n")
             for line, board_list in self.EXTRA_PRJ_CONF_DIRECTIVES.items():
                 if options["idf_target"] in board_list:
                     f.write(f"{line}\n")
 
             f.write("\n")
 
-    API_SERVER_CRT_LIBS_TOKEN = "<API_SERVER_CRT_LIBS>"
 
-    CRT_LIBS_BY_PROJECT_TYPE = {
-        "host_driven": "microtvm_rpc_server microtvm_rpc_common common",
-        "aot_demo": "memory microtvm_rpc_common common",
-    }
-
-    def _get_platform_version(self, zephyr_base: str) -> float:
+    def _get_platform_version(self) -> float:
+        check_idf()
         idf_args = [IDF_CMD, "--version"]
-        env = os.environ.copy()
-        # env["IDF_TOOLS_PATH"] = ?  # TODO(@PhilippvK)
-        out = check_output(idf_args, env=env).decode("utf-8")
-        version_str = re.search(r'v(\d+.\d+)', out).group(1)
+        out = check_output(idf_args).decode("utf-8")
+        version_str = re.search(r"v(\d+.\d+)", out).group(1)
         try:
             version = float(version_str)
         except ValueError:
@@ -393,9 +316,9 @@ class Handler(server.ProjectAPIHandler):
 
     def generate_project(self, model_library_format_path, standalone_crt_dir, project_dir, options):
         # Check ESP-IDF version
-        version = self._get_platform_version(get_idf_path(options))
+        version = self._get_platform_version()
         if version != ESPIDF_VERSION:
-            message = f"ESP-IDF version found is not supported: found {version}, expected {ESPID_VERSION}."
+            message = f"ESP-IDF version found is not supported: found {version}, expected {ESPIDF_VERSION}."
             if options.get("warning_as_error") is not None and options["warning_as_error"]:
                 raise server.ServerError(message=message)
             _LOG.warning(message)
@@ -425,30 +348,16 @@ class Handler(server.ProjectAPIHandler):
         # Populate CRT.
         crt_path = project_dir / "crt"
         crt_path.mkdir()
-        for item in self.CRT_COPY_ITEMS:
+
+        CRT_COPY_ITEMS = ("include", "Makefile", "src")
+
+        for item in CRT_COPY_ITEMS:
             src_path = os.path.join(standalone_crt_dir, item)
             dst_path = crt_path / item
             if os.path.isdir(src_path):
                 shutil.copytree(src_path, dst_path)
             else:
                 shutil.copy2(src_path, dst_path)
-
-        # Populate Makefile.
-        with open(API_SERVER_DIR / "CMakeLists.txt.template", "r") as cmake_template_f:
-            with open(project_dir / "CMakeLists.txt", "w") as cmake_f:
-                for line in cmake_template_f:
-                    if self.API_SERVER_CRT_LIBS_TOKEN in line:
-                        crt_libs = self.CRT_LIBS_BY_PROJECT_TYPE[options["project_type"]]
-                        line = line.replace("<API_SERVER_CRT_LIBS>", crt_libs)
-
-                    cmake_f.write(line)
-
-                if options.get("compile_definitions"):
-                    flags = options.get("compile_definitions")
-                    for item in flags:
-                        cmake_f.write(f"target_compile_definitions(app PUBLIC {item})\n")
-
-        self._create_prj_conf(project_dir, options)
 
         # Populate crt-config.h
         crt_config_dir = project_dir / "crt_config"
@@ -458,8 +367,11 @@ class Handler(server.ProjectAPIHandler):
         )
 
         # Populate src/
-        src_dir = project_dir / "main"
-        shutil.copytree(API_SERVER_DIR / "src" / options["project_type"], src_dir)
+        shutil.copytree(
+            API_SERVER_DIR / "src" / options["project_type"], project_dir, dirs_exist_ok=True
+        )
+
+        self._create_prj_conf(project_dir, options)
 
         # Populate extra_files
         if options.get("extra_files_tar"):
@@ -467,12 +379,13 @@ class Handler(server.ProjectAPIHandler):
                 tf.extractall(project_dir)
 
     def configure(self, options):
+        check_idf()
         idf_args = [IDF_CMD, "set-target", options["idf_target"]]
         env = os.environ.copy()
-        env["IDF_TOOLS_PATH"] = options.get("IDF_TOOLS_PATH", "")
         check_call(idf_args, cwd=API_SERVER_DIR, env=env)
 
     def build(self, options):
+        check_idf()
         if not BUILD_DIR.is_dir():
             self.configure(options)
 
@@ -482,13 +395,12 @@ class Handler(server.ProjectAPIHandler):
 
         check_call(idf_args, cwd=API_SERVER_DIR)
 
-
     def flash(self, options):
+        check_idf()
         idf_target = options["idf_target"]
 
         idf_args = [IDF_CMD, "flash"]  # TODO(@PhilippvK): set serial port and baud?
         check_call(idf_args, cwd=API_SERVER_DIR)
-
 
     def open_transport(self, options):
         transport = EspidfSerialTransport(options)
@@ -517,7 +429,6 @@ class Handler(server.ProjectAPIHandler):
 
 
 class EspidfSerialTransport:
-
     @classmethod
     def _find_serial_port(cls, options):
         flash_runner = "espidf"  # TODO(@PhilippvK): Support standalone esptool as well?
@@ -540,7 +451,7 @@ class EspidfSerialTransport:
         high = False
         low = True
         self._port = serial.Serial(port_path, baudrate=self._lookup_baud_rate(self._options))
-        # ser = serial.Serial(port, baud)
+        # Workaround for fixing ESP32-C3 serial
         self._port.close()
         self._port.dtr = False
         self._port.rts = False
@@ -556,11 +467,8 @@ class EspidfSerialTransport:
         self._port.rts = high
         self._port.dtr = self._port.dtr
         return server.TransportTimeouts(
-            # session_start_retry_timeout_sec=2.0,
             session_start_retry_timeout_sec=2.0 * 3,
-            # session_start_timeout_sec=5.0,
             session_start_timeout_sec=5.0 * 3,
-            # session_established_timeout_sec=5.0,
             session_established_timeout_sec=5.0 * 15,
         )
 
