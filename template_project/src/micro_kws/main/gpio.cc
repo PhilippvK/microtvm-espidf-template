@@ -56,15 +56,20 @@ esp_err_t InitializeGPIO() {
                                     .duty_resolution = LEDC_TIMER_8_BIT,
                                     .timer_num = LEDC_TIMER_0,
                                     .freq_hz = 1000,
-                                    .clk_cfg = LEDC_AUTO_CLK};
+                                    .clk_cfg = LEDC_AUTO_CLK,
+                                    .deconfigure = false};
   ledc_channel_config_t ledc_channel = {.gpio_num = GPIO_LED_RED,
                                         .speed_mode = LEDC_LOW_SPEED_MODE,
                                         .channel = LED_RED_CHANNEL,
                                         .intr_type = LEDC_INTR_DISABLE,
                                         .timer_sel = LEDC_TIMER_0,
                                         .duty = 0,
-                                        .hpoint = 0/*,
-                                        .flags.output_invert = 0*/}; // TODO(fabianpedd): For whatever reason the compiler is not happy about this?!
+                                        .hpoint = 0,
+                                        .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
+                                        .flags = {
+                                          .output_invert = 0,
+                                        },
+                                        .deconfigure = false,}; // TODO(fabianpedd): For whatever reason the compiler is not happy about this?!
   ledc_timer_config(&ledc_timer);
   ledc_channel_config(&ledc_channel);
 

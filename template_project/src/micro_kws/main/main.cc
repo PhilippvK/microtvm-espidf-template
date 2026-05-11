@@ -26,7 +26,7 @@
 #include "audio.h"
 #include "backend.h"
 #include "debug.h"
-#include "driver/i2s.h"
+// #include "driver/i2s.h"
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "esp_system.h"
