@@ -42,8 +42,7 @@
 // inference performance / inferences per second.
 constexpr size_t posterior_suppression_ms = CONFIG_MICRO_KWS_POSTERIOR_SUPPRESSION_MS;
 constexpr size_t posterior_history_length = CONFIG_MICRO_KWS_POSTERIOR_HISTORY_LENGTH;
-constexpr size_t posterior_trigger_threshold =
-    CONFIG_MICRO_KWS_POSTERIOR_TRIGGER_THRESHOLD_SINGLE * CONFIG_MICRO_KWS_POSTERIOR_HISTORY_LENGTH;
+constexpr size_t posterior_trigger_threshold = CONFIG_MICRO_KWS_POSTERIOR_TRIGGER_THRESHOLD_SINGLE;
 constexpr size_t posterior_category_count = CONFIG_MICRO_KWS_NUM_CLASSES;
 
 /**

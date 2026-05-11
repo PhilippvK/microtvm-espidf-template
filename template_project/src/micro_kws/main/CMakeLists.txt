@@ -44,7 +44,7 @@ set(KISSFFT_INCS kissfft/ kissfft/tools/)
 
 set(MLF_DIR ${CMAKE_SOURCE_DIR}/model/)
 
-set(CRT_DIR ${CMAKE_SOURCE_DIR}/crt/)
+set(CRT_DIR ${MLF_DIR}/runtime)
 
 set(TVM_SRCS ${MLF_DIR}/codegen/host/src/default_lib0.c ${MLF_DIR}/codegen/host/src/default_lib1.c)
 
@@ -64,5 +64,11 @@ idf_component_register(
     ${TVM_INCS}
     REQUIRES
     spi_flash
+    driver
+    esp_driver_i2s
+    esp_driver_gpio
+    esp_driver_uart
+    esp_driver_ledc
+    esp_ringbuf 
     student
 )

@@ -21,6 +21,7 @@
 #include "debug.h"
 
 #include <ctype.h>
+#include <inttypes.h>
 
 #include <cstring>
 
@@ -224,7 +225,7 @@ esp_err_t DebugRun(int8_t* feature_data, uint8_t* category_data, uint8_t top_cat
 #ifdef CONFIG_MICRO_KWS_PRINT_OUTPUTS
   printf("\t");
 #endif  // CONFIG_MICRO_KWS_PRINT_OUTPUTS
-  printf("Δ%dms", delta_time);
+  printf("Δ%" PRId32 "ms", delta_time);
   last_time = this_time;
 #endif  // CONFIG_MICRO_KWS_PRINT_TIME
 #ifdef CONFIG_MICRO_KWS_MODE_DEFAULT
@@ -320,7 +321,7 @@ void micro_audio(void* params) {
 
   // Set RGB to red in order to indicate start of recording.
   SetLEDColor(LED_RGB_RED);
-  printf("Starting recording at %d ms...\n", (uint32_t)(esp_timer_get_time() / 1000) - start_time);
+  printf("Starting recording at %" PRId32 " ms...\n", (uint32_t)(esp_timer_get_time() / 1000) - start_time);
 
   // Start actual recording until all data is collected.
   size_t total_bytes_read = 0;
@@ -359,7 +360,7 @@ void micro_audio(void* params) {
 
   // Set RGB to yellow in order to indicate transmission to host PC.
   SetLEDColor(LED_RGB_YELLOW);
-  printf("Stopping recording at %d ms.\n", (uint32_t)(esp_timer_get_time() / 1000) - start_time);
+  printf("Stopping recording at %" PRId32 " ms.\n", (uint32_t)(esp_timer_get_time() / 1000) - start_time);
 
   // Only now initalize UART Debug driver.
   if (InitializeDebug() != ESP_OK) {

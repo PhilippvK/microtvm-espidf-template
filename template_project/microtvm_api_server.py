@@ -349,16 +349,6 @@ class Handler(server.ProjectAPIHandler):
         crt_path = project_dir / "crt"
         crt_path.mkdir()
 
-        CRT_COPY_ITEMS = ("include", "Makefile", "src")
-
-        for item in CRT_COPY_ITEMS:
-            src_path = os.path.join(standalone_crt_dir, item)
-            dst_path = crt_path / item
-            if os.path.isdir(src_path):
-                shutil.copytree(src_path, dst_path)
-            else:
-                shutil.copy2(src_path, dst_path)
-
         # Populate crt-config.h
         crt_config_dir = project_dir / "crt_config"
         crt_config_dir.mkdir()
