@@ -50,23 +50,53 @@ from tvm.micro.project_api import server
 
 _LOG = logging.getLogger(__name__)
 
+def str2bool(value, allow_none=False):
+    if value is None:
+        assert allow_none, "str2bool received None value while allow_none=False"
+        return value
+    return bool(value) if isinstance(value, (int, bool)) else bool(distutils.util.strtobool(value))
 
-API_SERVER_DIR = pathlib.Path(os.path.dirname(__file__))
 
-BUILD_DIR = API_SERVER_DIR / "build"
+PRINT = str2bool(os.environ.get("MICROTVM_API_PRINT", False))
+_LOG.setLevel(logging.INFO if PRINT else logging.WARNING)
 
+def check_call(cmd_args, *args, quiet: bool = True, **kwargs):
+    cwd_str = "" if "cwd" not in kwargs else f" (in cwd: {kwargs['cwd']})"
+    _LOG.info("run%s: %s", cwd_str, " ".join(shlex.quote(str(a)) for a in cmd_args))
+    if quiet:
+        kwargs["stderr"] = subprocess.DEVNULL
+        kwargs["stdout"] = subprocess.DEVNULL
+    return subprocess.check_call(cmd_args, *args, **kwargs)
+
+
+def check_output(cmd_args, *args, quiet: bool = True, **kwargs):
+    cwd_str = "" if "cwd" not in kwargs else f" (in cwd: {kwargs['cwd']})"
+    _LOG.info("run%s: %s", cwd_str, " ".join(shlex.quote(str(a)) for a in cmd_args))
+    if quiet:
+        kwargs["stderr"] = subprocess.DEVNULL
+        kwargs["stdout"] = subprocess.DEVNULL
+    return subprocess.check_output(cmd_args, *args, **kwargs)
+
+
+def debug_print(*args, **kwargs):
+    if PRINT:
+        print(*args, **kwargs)
+
+# DBG = str2bool(os.environ.get("MICROTVM_API_DBG", False))
+
+PROJECT_DIR = pathlib.Path(os.path.dirname(__file__) or os.getcwd())
 
 MODEL_LIBRARY_FORMAT_RELPATH = "model.tar"
 
+IS_TEMPLATE = not (PROJECT_DIR / MODEL_LIBRARY_FORMAT_RELPATH).exists()
 
-IS_TEMPLATE = not (API_SERVER_DIR / MODEL_LIBRARY_FORMAT_RELPATH).exists()
+API_SERVER_DIR = pathlib.Path(os.path.dirname(__file__))
 
+BUILD_DIR = PROJECT_DIR / "build"
 
-BOARDS = API_SERVER_DIR / "boards.json"
+BOARDS = PROJECT_DIR / "boards.json"
 
-# Used to check Zephyr version installed on the host.
-# We only check two levels of the version.
-ESPIDF_VERSION = 4.4
+ESPIDF_VERSION = "6.0"
 
 IDF_CMD = "idf.py"
 
@@ -77,18 +107,6 @@ try:
         BOARD_PROPERTIES = json.load(boards)
 except FileNotFoundError:
     raise FileNotFoundError(f"Board file {{{BOARDS}}} does not exist.")
-
-
-def check_call(cmd_args, *args, **kwargs):
-    cwd_str = "" if "cwd" not in kwargs else f" (in cwd: {kwargs['cwd']})"
-    _LOG.info("run%s: %s", cwd_str, " ".join(shlex.quote(a) for a in cmd_args))
-    return subprocess.check_call(cmd_args, *args, **kwargs)
-
-
-def check_output(cmd_args, *args, **kwargs):
-    cwd_str = "" if "cwd" not in kwargs else f" (in cwd: {kwargs['cwd']})"
-    _LOG.info("run%s: %s", cwd_str, " ".join(shlex.quote(a) for a in cmd_args))
-    return subprocess.check_output(cmd_args, *args, **kwargs)
 
 
 CACHE_ENTRY_RE = re.compile(r"(?P<name>[^:]+):(?P<type>[^=]+)=(?P<value>.*)")
@@ -194,7 +212,7 @@ def generic_find_serial_port(serial_number=None):
 
 PROJECT_TYPES = []
 if IS_TEMPLATE:
-    for d in (API_SERVER_DIR / "src").iterdir():
+    for d in (PROJECT_DIR / "src").iterdir():
         if d.is_dir():
             PROJECT_TYPES.append(d.name)
 
@@ -218,6 +236,20 @@ PROJECT_OPTIONS = [
         optional=["build"],
         type="bool",
         help="Run build with verbose output.",
+    ),
+    server.ProjectOption(
+        "quiet",
+        optional=["build"],
+        type="bool",
+        default=True,
+        help="Supress all compilation messages",
+    ),
+    server.ProjectOption(
+        "debug",
+        optional=["build"],
+        type="bool",
+        default=False,
+        help="Build with debugging symbols and -O0",
     ),
     server.ProjectOption(
         "idf_target",
@@ -256,7 +288,8 @@ PROJECT_OPTIONS = [
 ]
 
 
-def check_idf():
+def check_idf(quiet: bool = False):
+    del quiet
     if shutil.which(IDF_CMD) is None:
         raise RuntimeError("idf.exe not found. Please setup ESP-IDF first in you terminal session.")
 
@@ -272,7 +305,7 @@ class Handler(server.ProjectAPIHandler):
             is_template=IS_TEMPLATE,
             model_library_format_path=""
             if IS_TEMPLATE
-            else (API_SERVER_DIR / MODEL_LIBRARY_FORMAT_RELPATH),
+            else (PROJECT_DIR / MODEL_LIBRARY_FORMAT_RELPATH),
             project_options=PROJECT_OPTIONS,
         )
 
@@ -285,30 +318,36 @@ class Handler(server.ProjectAPIHandler):
         with open(dest, mode) as f:
             # f.write("# For math routines\n" "CONFIG_NEWLIB_LIBC=y\n" "\n")
             project_type = options["project_type"]
+            assert project_type is not None
             f.write("\n# Project specific sdkconfig.defaults directives\n")
             if project_type == "host_driven":
                 f.write("CONFIG_ESP_TASK_WDT=n\n")
-                f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
+                f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")  # TODO: Handle via Kconfig?
                 f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
             elif project_type == "micro_kws":
                 classes = options.get("num_classes", 4)
                 f.write(f"CONFIG_MICRO_KWS_NUM_CLASSES={classes}\n")
+            else:
+                pass
 
             f.write("\n# Board specific sdkconfig.defaults directives\n")
+            idf_target = options["idf_target"]
+            assert idf_target is not None
             for line, board_list in self.EXTRA_PRJ_CONF_DIRECTIVES.items():
-                if options["idf_target"] in board_list:
+                if idf_target in board_list:
                     f.write(f"{line}\n")
 
             f.write("\n")
 
 
-    def _get_platform_version(self) -> float:
+    def _get_platform_version(self, quiet: bool = False) -> str:
         check_idf()
         idf_args = [IDF_CMD, "--version"]
-        out = check_output(idf_args).decode("utf-8")
+        out = check_output(idf_args, quiet=quiet).decode("utf-8")
         version_str = re.search(r"v(\d+.\d+)", out).group(1)
         try:
             version = float(version_str)
+            version = f"{version:.1f}"
         except ValueError:
             # Unable to detect version
             version = None
@@ -316,7 +355,8 @@ class Handler(server.ProjectAPIHandler):
 
     def generate_project(self, model_library_format_path, standalone_crt_dir, project_dir, options):
         # Check ESP-IDF version
-        version = self._get_platform_version()
+        quiet = str2bool(options.get("quiet"))
+        version = self._get_platform_version(quiet=quiet)
         if version != ESPIDF_VERSION:
             message = f"ESP-IDF version found is not supported: found {version}, expected {ESPIDF_VERSION}."
             if options.get("warning_as_error") is not None and options["warning_as_error"]:
@@ -346,19 +386,21 @@ class Handler(server.ProjectAPIHandler):
             tf.extractall(path=extract_path)
 
         # Populate CRT.
-        crt_path = project_dir / "crt"
-        crt_path.mkdir()
+        # crt_path = project_dir / "crt"
+        # crt_path.mkdir()
 
         # Populate crt-config.h
         crt_config_dir = project_dir / "crt_config"
         crt_config_dir.mkdir()
         shutil.copy2(
-            API_SERVER_DIR / "crt_config" / "crt_config.h", crt_config_dir / "crt_config.h"
+            PROJECT_DIR / "crt_config" / "crt_config.h", crt_config_dir / "crt_config.h"
         )
 
         # Populate src/
+        project_type = options["project_type"]
+        assert project_type is not None
         shutil.copytree(
-            API_SERVER_DIR / "src" / options["project_type"], project_dir, dirs_exist_ok=True
+            PROJECT_DIR / "src" / project_type, project_dir, dirs_exist_ok=True
         )
 
         self._create_prj_conf(project_dir, options)
@@ -369,13 +411,18 @@ class Handler(server.ProjectAPIHandler):
                 tf.extractall(project_dir)
 
     def configure(self, options):
-        check_idf()
-        idf_args = [IDF_CMD, "set-target", options["idf_target"]]
+        quiet = str2bool(options.get("quiet"))
+        check_idf(quiet=quiet)
+        idf_target = options["idf_target"]
+        assert idf_target is not None
+        idf_args = [IDF_CMD, "set-target", idf_target]
         env = os.environ.copy()
-        check_call(idf_args, cwd=API_SERVER_DIR, env=env)
+        check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
 
     def build(self, options):
-        check_idf()
+        debug_print("build")
+        quiet = str2bool(options.get("quiet"))
+        check_idf(quiet=quiet)
         if not BUILD_DIR.is_dir():
             self.configure(options)
 
@@ -383,16 +430,20 @@ class Handler(server.ProjectAPIHandler):
         if options.get("verbose"):
             idf_args.append("-DCMAKE_VERBOSE_MAKEFILE:BOOL=TRUE")
 
-        check_call(idf_args, cwd=API_SERVER_DIR)
+        check_call(idf_args, cwd=PROJECT_DIR, quiet=quiet)
 
     def flash(self, options):
-        check_idf()
+        quiet = str2bool(options.get("quiet"))
+        check_idf(quiet=quiet)
         idf_target = options["idf_target"]
+        assert idf_target is not None
 
         idf_args = [IDF_CMD, "flash"]  # TODO(@PhilippvK): set serial port and baud?
-        check_call(idf_args, cwd=API_SERVER_DIR)
+        check_call(idf_args, cwd=PROJECT_DIR, quiet=quiet)
 
     def open_transport(self, options):
+        debug_print("open_transport")
+        # TODO: allow transport via uart0, uart1, wifi
         transport = EspidfSerialTransport(options)
 
         to_return = transport.open()
@@ -401,17 +452,22 @@ class Handler(server.ProjectAPIHandler):
         return to_return
 
     def close_transport(self):
+        debug_print("close_transport")
         if self._transport is not None:
             self._transport.close()
             self._transport = None
 
     def read_transport(self, n, timeout_sec):
+        debug_print("read_transport", n)
         if self._transport is None:
             raise server.TransportClosedError()
 
-        return self._transport.read(n, timeout_sec)
+        ret = self._transport.read(n, timeout_sec)
+        debug_print("ret", ret, len(ret))
+        return ret
 
     def write_transport(self, data, timeout_sec):
+        debug_print("write_transport", data, len(data))
         if self._transport is None:
             raise server.TransportClosedError()
 
@@ -442,6 +498,7 @@ class EspidfSerialTransport:
         low = True
         self._port = serial.Serial(port_path, baudrate=self._lookup_baud_rate(self._options))
         # Workaround for fixing ESP32-C3 serial
+        # TODO: handle ESP32P4,...
         self._port.close()
         self._port.dtr = False
         self._port.rts = False

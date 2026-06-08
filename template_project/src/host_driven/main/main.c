@@ -41,8 +41,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/ringbuf.h"
 #include "esp_log.h"
-#include "esp_spi_flash.h"
+#include "esp_timer.h"
+#include "spi_flash_mmap.h"
 #include "esp_system.h"
 #include "sdkconfig.h"
 #include "crt_config.h"
@@ -154,7 +156,8 @@ tvm_crt_error_t TVMPlatformGenerateRandom(uint8_t* buffer, size_t num_bytes) {
 }
 
 // #define CRT_MEMORY_NUM_PAGES 216
-#define CRT_MEMORY_NUM_PAGES (200 + 40 + 10)
+// #define CRT_MEMORY_NUM_PAGES (200 + 40 + 10)
+#define CRT_MEMORY_NUM_PAGES (200 + 40)
 #define CRT_MEMORY_PAGE_SIZE_LOG2 10
 
 // Heap for use by TVMPlatformMemoryAllocate.
@@ -222,7 +225,7 @@ static void uart_event_task(void* pvParameters) {
   uint8_t* data;
   for (;;) {
     // Waiting for UART event.
-    if (xQueueReceive(uart0_queue, (void*)&event, (portTickType)portMAX_DELAY)) {
+    if (xQueueReceive(uart0_queue, (void*)&event, (TickType_t)portMAX_DELAY)) {
       switch (event.type) {
         // Event of UART receving data
         /*We'd better handler data event fast, there would be much more data
@@ -334,7 +337,7 @@ void app_main(void) {
       .parity = UART_PARITY_DISABLE,
       .stop_bits = UART_STOP_BITS_1,
       .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-      .source_clk = UART_SCLK_APB,
+      // .source_clk = UART_SCLK_APB,
   };
   // Install UART driver, and get the queue.
   uart_driver_install(EX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 200, &uart0_queue, 0);

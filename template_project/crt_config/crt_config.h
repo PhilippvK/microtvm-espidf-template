@@ -18,33 +18,36 @@
  */
 
 /*!
- * \file tvm/runtime/crt_config.h.template
+ * \file tvm/runtime/crt_config.h
  * \brief Template for CRT configuration, to be modified on each target.
  */
-#ifndef TVM_RUNTIME_CRT_CONFIG_H_
-#define TVM_RUNTIME_CRT_CONFIG_H_
-
-#include <tvm/runtime/crt/logging.h>
+#ifndef TVM_RUNTIME_CRT_CRT_CONFIG_H_
+#define TVM_RUNTIME_CRT_CRT_CONFIG_H_
 
 /*! Log level of the CRT runtime */
 #define TVM_CRT_LOG_LEVEL TVM_CRT_LOG_LEVEL_DEBUG
+
+/*! Support low-level debugging in MISRA-C runtime */
+#define TVM_CRT_DEBUG 0
 
 /*! Maximum supported dimension in NDArray */
 #define TVM_CRT_MAX_NDIM 6
 
 /*! Maximum supported arguments in generated functions */
-#define TVM_CRT_MAX_ARGS 10
+#define TVM_CRT_MAX_ARGS 20
 
 /*! Size of the global function registry, in bytes. */
-// #define TVM_CRT_GLOBAL_FUNC_REGISTRY_SIZE_BYTES 256
-#define TVM_CRT_GLOBAL_FUNC_REGISTRY_SIZE_BYTES 512
+#define TVM_CRT_GLOBAL_FUNC_REGISTRY_SIZE_BYTES 1024
 
 /*! Maximum number of registered modules. */
-// #define TVM_CRT_MAX_REGISTERED_MODULES 2
-#define TVM_CRT_MAX_REGISTERED_MODULES 3
+#define TVM_CRT_MAX_REGISTERED_MODULES 4
 
 /*! Maximum packet size, in bytes, including the length header. */
-#define TVM_CRT_MAX_PACKET_SIZE_BYTES 8192
+// #define TVM_CRT_MAX_PACKET_SIZE_BYTES (4096 * 32)  // freezes
+// #define TVM_CRT_MAX_PACKET_SIZE_BYTES (4096)  // freezes
+#define TVM_CRT_MAX_PACKET_SIZE_BYTES (2048)  // ok
+// #define TVM_CRT_MAX_PACKET_SIZE_BYTES (1024)  // ok?
+// #define TVM_CRT_MAX_PACKET_SIZE_BYTES (128)  // crashes!
 
 /*! Maximum supported string length in dltype, e.g. "int8", "int16", "float32" */
 #define TVM_CRT_MAX_STRLEN_DLTYPE 10
@@ -55,15 +58,7 @@
 /*! Maximum supported string length in parameter names */
 #define TVM_CRT_MAX_STRLEN_PARAM_NAME 80
 
-/*! \brief Maximum length of a PackedFunc function name. */
-#define TVM_CRT_MAX_FUNCTION_NAME_LENGTH_BYTES 30
+/*! Enable checks to enforce the stack allocator with a FIFO ordering. Off by default */
+// #define TVM_CRT_STACK_ALLOCATOR_ENABLE_FIFO_CHECK
 
-/*! \brief Log2 of the page size (bytes) for a virtual memory page. */
-#define TVM_CRT_PAGE_BITS 10  // 1 kB
-
-/*! \brief Number of pages on device. */
-#define TVM_CRT_MAX_PAGES 300
-
-// #define TVM_CRT_FRAMER_ENABLE_LOGS
-
-#endif  // TVM_RUNTIME_CRT_CONFIG_H_
+#endif  // TVM_RUNTIME_CRT_CRT_CONFIG_H_
