@@ -339,7 +339,7 @@ class Handler(server.ProjectAPIHandler):
                 assert transport is not None
                 if transport == "uart":
                     f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
-                elif transport in ["wifi_ap", "wifi_sat"]:
+                elif transport in ["wifi_ap", "wifi_sta"]:
                     f.write("CONFIG_ESP_HOST_WIFI_ENABLED=y\n")
                     f.write("CONFIG_MICROTVM_TRANSPORT_MODE_WIFI=y\n")
                     if transport == "wifi_ap":
@@ -477,7 +477,7 @@ class Handler(server.ProjectAPIHandler):
         assert transport is not None
         if transport == "uart":
             transport = EspidfSerialTransport(options)
-        elif transport in ["wifi_ap", "wifi_sat"]:
+        elif transport in ["wifi_ap", "wifi_sta"]:
             transport = EspidfWiFiTransport(options)
         else:
             raise ValueError(f"Unsupported transport: {transport}")
