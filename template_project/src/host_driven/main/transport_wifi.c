@@ -386,12 +386,15 @@ void transport_wifi_init(RingbufHandle_t ringbuf)
 {
 
     s_ringbuf = ringbuf;
+    printf("A\n");
 
     ESP_ERROR_CHECK(
         esp_netif_init());
+    printf("B\n");
 
     ESP_ERROR_CHECK(
         esp_event_loop_create_default());
+    printf("C\n");
 
 #ifdef CONFIG_MICROTVM_WIFI_STA
     wifi_init_sta();
@@ -400,8 +403,11 @@ void transport_wifi_init(RingbufHandle_t ringbuf)
 #ifdef CONFIG_MICROTVM_WIFI_AP
     wifi_init_ap();
 #endif
+    printf("D\n");
 
     socket_server_start();
+
+    printf("E\n");
 
     // wait_for_client();
     xTaskCreate(wifi_rx_task, "wifi_rx_task", 2048, NULL, 12, NULL);

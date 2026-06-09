@@ -61,7 +61,7 @@ static const char* TAG = "microtvm";
 
 #endif
 
-#ifdef MICROTVM_TRANSPORT_MODE_WIFI
+#ifdef CONFIG_MICROTVM_TRANSPORT_MODE_WIFI
 #include "transport_wifi.h"
 #endif
 
@@ -99,7 +99,7 @@ ssize_t write_serial(void* unused_context, const uint8_t* data, size_t size) {
   g_num_bytes_requested += size;
 
 
-#ifdef MICROTVM_TRANSPORT_MODE_WIFI
+#ifdef CONFIG_MICROTVM_TRANSPORT_MODE_WIFI
   ssize_t size_ = transport_wifi_write(data, size);
   g_num_bytes_written += size_;
 #else
@@ -167,7 +167,8 @@ tvm_crt_error_t TVMPlatformGenerateRandom(uint8_t* buffer, size_t num_bytes) {
 
 // #define CRT_MEMORY_NUM_PAGES 216
 // #define CRT_MEMORY_NUM_PAGES (200 + 40 + 10)
-#define CRT_MEMORY_NUM_PAGES (200 + 40)
+// #define CRT_MEMORY_NUM_PAGES (200 + 40)
+#define CRT_MEMORY_NUM_PAGES (200 + 20)
 #define CRT_MEMORY_PAGE_SIZE_LOG2 10
 
 // Heap for use by TVMPlatformMemoryAllocate.
@@ -316,6 +317,7 @@ static void uart_event_task(void* pvParameters) {
 
 void app_main(void) {
   esp_log_level_set(TAG, ESP_LOG_INFO);
+  // printf("app_main\n");
 
   // initialize gpios
 #ifdef CONFIG_LED_PIN_RED
@@ -340,7 +342,8 @@ void app_main(void) {
     printf("Failed to create ring buffer\n");
   }
 
-#ifdef MICROTVM_TRANSPORT_MODE_WIFI
+#ifdef CONFIG_MICROTVM_TRANSPORT_MODE_WIFI
+  printf("transport_wifi_init\n");
   transport_wifi_init(buf_handle);
 #else
   // Configure parameters of an UART driver, communication pins and install the
@@ -366,6 +369,7 @@ void app_main(void) {
   // Create a task to handler UART event from ISR
   xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
 #endif
+  printf("done\n");
 
   // setup memory manager
   tvm_crt_error_t ret = PageMemoryManagerCreate(&g_memory_manager, tvm_heap, sizeof(tvm_heap),
@@ -393,6 +397,7 @@ void app_main(void) {
     size_t bytes_read = 0;
     data2 = (uint8_t*)xRingbufferReceive(buf_handle, &bytes_read, pdMS_TO_TICKS(0));
     data = data2;
+    // printf("bytes_read=%u\n", bytes_read);
 
     if (bytes_read > 0) {
 #ifdef CONFIG_LED_PIN_RED
