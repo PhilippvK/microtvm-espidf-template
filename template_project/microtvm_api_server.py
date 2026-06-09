@@ -100,6 +100,11 @@ ESPIDF_VERSION = "6.0"
 
 IDF_CMD = "idf.py"
 
+WIFI_SSID = os.environ.get("MICROTVM_WIFI_SSID", "mywifi")
+WIFI_PASS = os.environ.get("MICROTVM_WIFI_PASS", "passwort")
+WIFI_PORT = int(os.environ.get("MICROTVM_WIFI_PORT", 9999))
+WIFI_HOST = os.environ.get("MICROTVM_WIFI_HOST", "192.168.4.1")
+
 # Data structure to hold the information microtvm_api_server.py needs
 # to communicate with each of these boards.
 try:
@@ -259,6 +264,14 @@ PROJECT_OPTIONS = [
         help="Name of the Espressif board to build for.",
     ),
     server.ProjectOption(
+        "transport",
+        required=["generate_project", "build", "open_transport"],
+        default="uart",
+        choices=["uart", "wifi_sta", "wifi_ap"],
+        type="str",
+        help="Type of transport.",
+    ),
+    server.ProjectOption(
         "idf_serial_port",
         optional=["open_transport"],
         default="",
@@ -322,7 +335,23 @@ class Handler(server.ProjectAPIHandler):
             f.write("\n# Project specific sdkconfig.defaults directives\n")
             if project_type == "host_driven":
                 f.write("CONFIG_ESP_TASK_WDT=n\n")
-                f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")  # TODO: Handle via Kconfig?
+                transport = options["transport"]
+                assert transport is not None
+                if transport == "uart":
+                    f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
+                elif transport in ["wifi_ap", "wifi_sat"]:
+                    f.write("CONFIG_ESP_HOST_WIFI_ENABLED=y\n")
+                    f.write("CONFIG_MICROTVM_TRANSPORT_MODE_WIFI=y\n")
+                    if transport == "wifi_ap":
+                        f.write("CONFIG_MICROTVM_WIFI_AP=y\n")
+                    else:
+                        assert transport == "wifi_sta"
+                        f.write("CONFIG_MICROTVM_WIFI_STA=y\n")
+                    f.write(f"CONFIG_MICROTVM_WIFI_SSID={WIFI_SSID}\n")
+                    f.write(f"CONFIG_MICROTVM_WIFI_PASSWORD={WIFI_PASS}\n")
+                    f.write(f"CONFIG_MICROTVM_WIFI_PORT={WIFI_PORT}\n")
+                else:
+                    raise ValueError(f"Unsupported transport: {transport}")
                 f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
             elif project_type == "micro_kws":
                 classes = options.get("num_classes", 4)
@@ -444,7 +473,14 @@ class Handler(server.ProjectAPIHandler):
     def open_transport(self, options):
         debug_print("open_transport")
         # TODO: allow transport via uart0, uart1, wifi
-        transport = EspidfSerialTransport(options)
+        transport = options["transport"]
+        assert transport is not None
+        if transport == "uart":
+            transport = EspidfSerialTransport(options)
+        elif transport in ["wifi_ap", "wifi_sat"]:
+            transport = EspidfWiFiTransport(options)
+        else:
+            raise ValueError(f"Unsupported transport: {transport}")
 
         to_return = transport.open()
         self._transport = transport
@@ -473,6 +509,8 @@ class Handler(server.ProjectAPIHandler):
 
         return self._transport.write(data, timeout_sec)
 
+
+# TODO: add abstract class
 
 class EspidfSerialTransport:
     @classmethod
@@ -538,6 +576,53 @@ class EspidfSerialTransport:
             n = self._port.write(data)
             data = data[n:]
             bytes_written += n
+
+
+import socket
+
+class EspidfWifiTransport:
+
+    def __init__(self, options):
+        self._options = options
+        self._sock = None
+
+    def open(self):
+        # host = self._options["wifi_host"]
+        # port = int(self._options.get("wifi_port", 9090))
+        if WIFI_HOST == "192.168.4.1":
+            transport_mode = self._options["transport"]
+            assert transport is not None
+            assert transport_mode == "wifi_ap", "Please provide IP for WiFi STA mode"
+
+        self._sock = socket.create_connection(
+            (WIFI_HOST, WIFI_PORT),
+            timeout=10.0,
+        )
+
+        return server.TransportTimeouts(
+            session_start_retry_timeout_sec=2.0 * 3,
+            session_start_timeout_sec=5.0 * 3,
+            session_established_timeout_sec=5.0 * 15,
+        )
+
+    def close(self):
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
+
+    def read(self, n, timeout_sec):
+        self._sock.settimeout(timeout_sec)
+
+        data = self._sock.recv(n)
+
+        if not data:
+            raise server.IoTimeoutError()
+
+        return data
+
+    def write(self, data, timeout_sec):
+        self._sock.settimeout(timeout_sec)
+        self._sock.sendall(data)
 
 
 if __name__ == "__main__":

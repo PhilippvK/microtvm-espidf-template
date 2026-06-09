@@ -1,0 +1,58 @@
+
+menu "MicroTVM"
+
+choice MICROTVM_TRANSPORT_MODE
+
+    prompt "Transport Mode"
+
+    default MICROTVM_TRANSPORT_MODE_UART
+
+config MICROTVM_TRANSPORT_MODE_UART
+
+    bool "UART"
+
+config MICROTVM_TRANSPORT_MODE_WIFI
+
+    bool "WiFi"
+
+endchoice
+
+choice MICROTVM_WIFI_MODE
+
+    prompt "WiFi Mode"
+    depends on MICROTVM_TRANSPORT_MODE_WIFI
+
+    default MICROTVM_WIFI_STA
+
+config MICROTVM_WIFI_STA
+
+    bool "Station"
+
+config MICROTVM_WIFI_AP
+
+    bool "Access Point"
+
+endchoice
+
+config MICROTVM_WIFI_SSID
+
+    string "SSID"
+    depends on MICROTVM_TRANSPORT_MODE_WIFI
+
+    default "mywifi"
+
+config MICROTVM_WIFI_PASSWORD
+
+    string "Password"
+    depends on MICROTVM_TRANSPORT_MODE_WIFI
+
+    default "password"
+
+config MICROTVM_WIFI_PORT
+
+    int "WiFi Socket Port"
+    depends on MICROTVM_TRANSPORT_MODE_WIFI
+
+    default 9999
+
+endmenu

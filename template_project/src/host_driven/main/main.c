@@ -48,6 +48,8 @@
 #include "esp_system.h"
 #include "sdkconfig.h"
 #include "crt_config.h"
+#include "common.h"
+#include "transport_state.h"
 
 static const char* TAG = "microtvm";
 
@@ -57,6 +59,10 @@ static const char* TAG = "microtvm";
 #define CONFIG_LED_PIN_GREEN ((gpio_num_t)4)
 #define CONFIG_LED_PIN_BLUE ((gpio_num_t)5)
 
+#endif
+
+#ifdef MICROTVM_TRANSPORT_MODE_WIFI
+#include "transport_wifi.h"
 #endif
 
 /**
@@ -72,17 +78,15 @@ static const char* TAG = "microtvm";
  * - Pin assignment: TxD (default), RxD (default)
  */
 
-static size_t g_num_bytes_requested = 0;
-static size_t g_num_bytes_written = 0;
-static size_t g_num_bytes_in_rx_buffer = 0;
-
 #define EX_UART_NUM UART_NUM_0
 
 #define CONFIG_GRAPH_EXECUTOR_MODULE
 
-// #define RING_BUF_SIZE_BYTES (TVM_CRT_MAX_PACKET_SIZE_BYTES + 100)
-#define RING_BUF_SIZE_BYTES (TVM_CRT_MAX_PACKET_SIZE_BYTES + 40000)
 static RingbufHandle_t buf_handle;
+
+volatile size_t g_num_bytes_requested = 0;
+volatile size_t g_num_bytes_written = 0;
+volatile size_t g_num_bytes_in_rx_buffer = 0;
 
 #define BUF_SIZE (1024)
 static QueueHandle_t uart0_queue;
@@ -94,8 +98,14 @@ ssize_t write_serial(void* unused_context, const uint8_t* data, size_t size) {
 #endif
   g_num_bytes_requested += size;
 
+
+#ifdef MICROTVM_TRANSPORT_MODE_WIFI
+  ssize_t size_ = transport_wifi_write(data, size);
+  g_num_bytes_written += size_;
+#else
   uart_write_bytes(EX_UART_NUM, data, size);
   g_num_bytes_written += size;
+#endif
 
 #ifdef CONFIG_LED_PIN_RED
   gpio_set_level(CONFIG_LED_PIN_RED, 0);
@@ -303,6 +313,7 @@ static void uart_event_task(void* pvParameters) {
   vTaskDelete(NULL);
 }
 
+
 void app_main(void) {
   esp_log_level_set(TAG, ESP_LOG_INFO);
 
@@ -329,6 +340,9 @@ void app_main(void) {
     printf("Failed to create ring buffer\n");
   }
 
+#ifdef MICROTVM_TRANSPORT_MODE_WIFI
+  transport_wifi_init(buf_handle);
+#else
   // Configure parameters of an UART driver, communication pins and install the
   // driver
   uart_config_t uart_config = {
@@ -351,6 +365,7 @@ void app_main(void) {
 
   // Create a task to handler UART event from ISR
   xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
+#endif
 
   // setup memory manager
   tvm_crt_error_t ret = PageMemoryManagerCreate(&g_memory_manager, tvm_heap, sizeof(tvm_heap),

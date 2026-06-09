@@ -12,10 +12,15 @@ if(EXISTS ${MLF_DIR}/codegen/host/include/)
     list(APPEND TVM_INCS ${MLF_DIR}/codegen/host/include/)
 endif()
 
+set(EXTRA_SRCS)
+if (CONFIG_MICROTVM_TRANSPORT_MODE_WIFI)
+    list(APPEND EXTRA_SRCS transport_wifi.c)
+endif()
 
 idf_component_register(
     SRCS
     main.c
+    ${EXTRA_SRCS}
     ${TVM_SRCS}
     ${TVM_KERNEL_SRCS}
     INCLUDE_DIRS
@@ -30,6 +35,9 @@ idf_component_register(
     esp_driver_ledc
     esp_ringbuf
     esp_timer
+    esp_event
+    esp_netif
+    esp_wifi
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
