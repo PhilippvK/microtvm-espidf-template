@@ -40,6 +40,7 @@ import tempfile
 import threading
 import time
 import usb
+import distutils.util
 
 import serial
 import serial.tools.list_ports
@@ -82,7 +83,7 @@ def debug_print(*args, **kwargs):
     if PRINT:
         print(*args, **kwargs)
 
-# DBG = str2bool(os.environ.get("MICROTVM_API_DBG", False))
+DBG = str2bool(os.environ.get("MICROTVM_API_DBG", False))
 
 PROJECT_DIR = pathlib.Path(os.path.dirname(__file__) or os.getcwd())
 
@@ -194,7 +195,11 @@ def generic_find_serial_port(serial_number=None):
         device_id = ":".join([prop["vid_hex"], prop["pid_hex"]])
         regex = device_id
 
-    serial_ports = list(serial.tools.list_ports.grep(regex))
+    # print("regex", regex)
+    serial_ports = serial.tools.list_ports.grep(regex)
+    # print("serial_ports", serial_ports)
+    serial_ports = list(serial_ports)
+    # print("serial_ports", serial_ports)
 
     # Workaround on MacOS
     if len(serial_ports) > 0:
@@ -311,6 +316,10 @@ class Handler(server.ProjectAPIHandler):
     def __init__(self):
         super(Handler, self).__init__()
         self._proc = None
+        self._rx_buffer = None
+        if DBG:
+            self.elfdest = tempfile.mkstemp(dir="/tmp/elfs")[1]
+            self.outputs = b""
 
     def server_info_query(self, tvm_version):
         return server.ServerInfo(
@@ -323,7 +332,13 @@ class Handler(server.ProjectAPIHandler):
         )
 
     # Creates extra lines added to sdkconfig.defaults file
-    EXTRA_PRJ_CONF_DIRECTIVES = {}
+    EXTRA_PRJ_CONF_DIRECTIVES = {
+        "CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y": ["esp32p4"],
+        "CONFIG_ESP32P4_REV_MIN_100=y": ["esp32p4"],
+        "CONFIG_ESP32P4_REV_MIN_FULL=100": ["esp32p4"],
+        "CONFIG_ESP_REV_MIN_FULL=100": ["esp32p4"],
+        # "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y": ["esp32p4"],  # 400MHz instead of default 360MHz
+    }
 
     def _create_prj_conf(self, project_dir, options):
         dest = project_dir / "sdkconfig.defaults"
@@ -338,7 +353,12 @@ class Handler(server.ProjectAPIHandler):
                 transport = options["transport"]
                 assert transport is not None
                 if transport == "uart":
-                    f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
+                    # f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
+                    f.write("CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y")
+                    f.write("CONFIG_LOG_DEFAULT_LEVEL_NONE=y")
+                    f.write("CONFIG_LOG_BOOTLOADER_LEVEL_NONE=y")
+
+                    pass
                 elif transport in ["wifi_ap", "wifi_sta"]:
                     f.write("CONFIG_ESP_HOST_WIFI_ENABLED=y\n")
                     f.write("CONFIG_MICROTVM_TRANSPORT_MODE_WIFI=y\n")
@@ -352,6 +372,7 @@ class Handler(server.ProjectAPIHandler):
                     f.write(f"CONFIG_MICROTVM_WIFI_PORT={WIFI_PORT}\n")
                 else:
                     raise ValueError(f"Unsupported transport: {transport}")
+
                 f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
             elif project_type == "micro_kws":
                 classes = options.get("num_classes", 4)
@@ -467,7 +488,11 @@ class Handler(server.ProjectAPIHandler):
         idf_target = options["idf_target"]
         assert idf_target is not None
 
-        idf_args = [IDF_CMD, "flash"]  # TODO(@PhilippvK): set serial port and baud?
+        idf_args = [IDF_CMD]
+        serial_port = options.get("idf_serial_port")
+        if serial_port:
+            idf_args += ["-p", serial_port]
+        idf_args += ["flash"]  # TODO(@PhilippvK): set serial port and baud?
         check_call(idf_args, cwd=PROJECT_DIR, quiet=quiet)
 
     def open_transport(self, options):
@@ -485,21 +510,52 @@ class Handler(server.ProjectAPIHandler):
         to_return = transport.open()
         self._transport = transport
         atexit.register(lambda: self.close_transport())
+        self._drain_until_rpc_start()
         return to_return
+
+    def _drain_until_rpc_start(self, timeout=10.0):
+        debug_print("_drain_until_rpc_start")
+        end = time.time() + timeout
+        hist = b""
+        while time.time() < end:
+            b = self._transport.read(1, timeout)
+            print("b", b)
+            hist += b
+            if not b:
+                continue
+
+            if b == b'\xfe':
+                # push back into buffer
+                self._rx_buffer = b
+                return
+
+        print("hist", hist)
+        raise RuntimeError("RPC start byte not found")
 
     def close_transport(self):
         debug_print("close_transport")
+        if DBG:
+            outfile = str(self.elfdest) + ".out"
+            with open(outfile, "wb") as f:
+                f.write(self.outputs)
         if self._transport is not None:
             self._transport.close()
             self._transport = None
 
     def read_transport(self, n, timeout_sec):
         debug_print("read_transport", n)
+        if self._rx_buffer:
+            data = self._rx_buffer
+            self._rx_buffer = b""
+            debug_print("ret", data)
+            return data
         if self._transport is None:
             raise server.TransportClosedError()
 
         ret = self._transport.read(n, timeout_sec)
         debug_print("ret", ret, len(ret))
+        if DBG:
+            self.outputs += ret
         return ret
 
     def write_transport(self, data, timeout_sec):
@@ -580,7 +636,7 @@ class EspidfSerialTransport:
 
 import socket
 
-class EspidfWifiTransport:
+class EspidfWiFiTransport:
 
     def __init__(self, options):
         self._options = options
