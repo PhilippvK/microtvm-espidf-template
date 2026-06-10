@@ -1,6 +1,6 @@
 set(MLF_DIR ${CMAKE_SOURCE_DIR}/model/)
-# set(CRT_DIR ${CMAKE_SOURCE_DIR}/crt/)
-set(CRT_DIR ${MLF_DIR}/runtime)
+set(CRT_DIR ${CMAKE_SOURCE_DIR}/crt/)
+# set(CRT_DIR ${MLF_DIR}/runtime)
 
 file(GLOB_RECURSE TVM_KERNEL_SRCS ${MLF_DIR}/codegen/host/src/*.c)
 
@@ -13,8 +13,16 @@ if(EXISTS ${MLF_DIR}/codegen/host/include/)
 endif()
 
 set(EXTRA_SRCS)
+set(EXTRA_COMPONENTS)
 if (CONFIG_MICROTVM_TRANSPORT_MODE_WIFI)
     list(APPEND EXTRA_SRCS transport_wifi.c)
+    list(APPEND EXTRA_COMPONENTS esp_event esp_netif esp_wifi)
+endif()
+
+set(EXTRA_OPTIONS)
+
+if(CONFIG_IDF_TOOLCHAIN STREQUAL "clang")
+    list(APPEND EXTRA_OPTIONS -Wno-error=unknown-warning-option)
 endif()
 
 idf_component_register(
@@ -28,16 +36,14 @@ idf_component_register(
     ${TVM_INCS}
     REQUIRES
     spi_flash
-    driver
+    # driver
     # esp_driver_i2s
     esp_driver_gpio
     esp_driver_uart
     esp_driver_ledc
     esp_ringbuf
     esp_timer
-    esp_event
-    esp_netif
-    esp_wifi
+    ${EXTRA_COMPONENTS}
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
@@ -47,5 +53,8 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=format
     -Wno-error=strict-aliasing
     -Wno-error=format-extra-args
+    -Wno-error=unused-const-variable
+    -Wno-error=attributes
     $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
+    ${EXTRA_OPTIONS}
     )
