@@ -70,12 +70,13 @@ def check_call(cmd_args, *args, quiet: bool = True, **kwargs):
     return subprocess.check_call(cmd_args, *args, **kwargs)
 
 
-def check_output(cmd_args, *args, quiet: bool = True, **kwargs):
+# def check_output(cmd_args, *args, quiet: bool = True, **kwargs):
+def check_output(cmd_args, *args, **kwargs):
     cwd_str = "" if "cwd" not in kwargs else f" (in cwd: {kwargs['cwd']})"
     _LOG.info("run%s: %s", cwd_str, " ".join(shlex.quote(str(a)) for a in cmd_args))
-    if quiet:
-        kwargs["stderr"] = subprocess.DEVNULL
-        kwargs["stdout"] = subprocess.DEVNULL
+    # if quiet:
+    #     kwargs["stderr"] = subprocess.DEVNULL
+    #     kwargs["stdout"] = subprocess.DEVNULL
     return subprocess.check_output(cmd_args, *args, **kwargs)
 
 
@@ -105,6 +106,12 @@ WIFI_SSID = os.environ.get("MICROTVM_WIFI_SSID", "mywifi")
 WIFI_PASS = os.environ.get("MICROTVM_WIFI_PASS", "passwort")
 WIFI_PORT = int(os.environ.get("MICROTVM_WIFI_PORT", 9999))
 WIFI_HOST = os.environ.get("MICROTVM_WIFI_HOST", "192.168.4.1")
+
+CCACHE = str2bool(os.environ.get("CCACHE", True))
+LOCK = str2bool(os.environ.get("LOCK", True))
+
+if LOCK:
+    from filelock import FileLock
 
 # Data structure to hold the information microtvm_api_server.py needs
 # to communicate with each of these boards.
@@ -195,11 +202,11 @@ def generic_find_serial_port(serial_number=None):
         device_id = ":".join([prop["vid_hex"], prop["pid_hex"]])
         regex = device_id
 
-    # print("regex", regex)
+    print("regex", regex)
     serial_ports = serial.tools.list_ports.grep(regex)
-    # print("serial_ports", serial_ports)
+    print("serial_ports", serial_ports)
     serial_ports = list(serial_ports)
-    # print("serial_ports", serial_ports)
+    print("serial_ports", serial_ports)
 
     # Workaround on MacOS
     if len(serial_ports) > 0:
@@ -262,6 +269,21 @@ PROJECT_OPTIONS = [
         help="Build with debugging symbols and -O0",
     ),
     server.ProjectOption(
+        "optimize",
+        required=["generate_project"],
+        default=None,
+        choices=["0", "g", "2", "s"],
+        type="str",
+        help="Optimization flag. Ignored if debug enabled",
+    ),
+    server.ProjectOption(
+        "toolchain",
+        required=["generate_project", "build"],
+        choices=["gcc", "clang", "llvm"],
+        type="str",
+        help="Type of IDF toolchain to use.",
+    ),
+    server.ProjectOption(
         "idf_target",
         required=["generate_project", "build", "flash", "open_transport"],
         choices=list(BOARD_PROPERTIES),
@@ -278,7 +300,7 @@ PROJECT_OPTIONS = [
     ),
     server.ProjectOption(
         "idf_serial_port",
-        optional=["open_transport"],
+        optional=["open_transport", "flash"],
         default="",
         type="str",
         help="Name of the serial port. (Leave empty to automatic lookup)",
@@ -320,6 +342,8 @@ class Handler(server.ProjectAPIHandler):
         if DBG:
             self.elfdest = tempfile.mkstemp(dir="/tmp/elfs")[1]
             self.outputs = b""
+        if LOCK:
+            self.device_lock = None
 
     def server_info_query(self, tvm_version):
         return server.ServerInfo(
@@ -330,6 +354,8 @@ class Handler(server.ProjectAPIHandler):
             else (PROJECT_DIR / MODEL_LIBRARY_FORMAT_RELPATH),
             project_options=PROJECT_OPTIONS,
         )
+
+    CRT_COPY_ITEMS = ("include", "CMakeLists.txt", "src")
 
     # Creates extra lines added to sdkconfig.defaults file
     EXTRA_PRJ_CONF_DIRECTIVES = {
@@ -354,9 +380,9 @@ class Handler(server.ProjectAPIHandler):
                 assert transport is not None
                 if transport == "uart":
                     # f.write("CONFIG_ESP_CONSOLE_UART_NONE=y\n")
-                    f.write("CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y")
-                    f.write("CONFIG_LOG_DEFAULT_LEVEL_NONE=y")
-                    f.write("CONFIG_LOG_BOOTLOADER_LEVEL_NONE=y")
+                    f.write("CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y\n")
+                    f.write("CONFIG_LOG_DEFAULT_LEVEL_NONE=y\n")
+                    f.write("CONFIG_LOG_BOOTLOADER_LEVEL_NONE=y\n")
 
                     pass
                 elif transport in ["wifi_ap", "wifi_sta"]:
@@ -373,12 +399,27 @@ class Handler(server.ProjectAPIHandler):
                 else:
                     raise ValueError(f"Unsupported transport: {transport}")
 
-                f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
             elif project_type == "micro_kws":
                 classes = options.get("num_classes", 4)
                 f.write(f"CONFIG_MICRO_KWS_NUM_CLASSES={classes}\n")
             else:
                 pass
+            debug = options["debug"]
+            optimize = options["optimize"]
+            if debug:
+                optimize = "g"
+            if optimize is None:
+                pass
+            elif optimize == "0":
+                f.write("CONFIG_COMPILER_OPTIMIZATION_NONE=y\n")
+            elif optimize == "g":
+                f.write("CONFIG_COMPILER_OPTIMIZATION_DEBUG=y\n")
+            elif optimize == "s":
+                f.write("CONFIG_COMPILER_OPTIMIZATION_SIZE=y\n")
+            elif optimize == "2":
+                f.write("CONFIG_COMPILER_OPTIMIZATION_PERF=y\n")
+            else:
+                raise ValueError(f"Unsupported optimization flag: {optimize}")
 
             f.write("\n# Board specific sdkconfig.defaults directives\n")
             idf_target = options["idf_target"]
@@ -393,7 +434,8 @@ class Handler(server.ProjectAPIHandler):
     def _get_platform_version(self, quiet: bool = False) -> str:
         check_idf()
         idf_args = [IDF_CMD, "--version"]
-        out = check_output(idf_args, quiet=quiet).decode("utf-8")
+        # out = check_output(idf_args, quiet=quiet).decode("utf-8")
+        out = check_output(idf_args).decode("utf-8")
         version_str = re.search(r"v(\d+.\d+)", out).group(1)
         try:
             version = float(version_str)
@@ -436,8 +478,15 @@ class Handler(server.ProjectAPIHandler):
             tf.extractall(path=extract_path)
 
         # Populate CRT.
-        # crt_path = project_dir / "crt"
-        # crt_path.mkdir()
+        crt_path = project_dir / "crt"
+        crt_path.mkdir()
+        for item in self.CRT_COPY_ITEMS:
+            src_path = standalone_crt_dir / item
+            dst_path = crt_path / item
+            if os.path.isdir(src_path):
+                shutil.copytree(src_path, dst_path)
+            else:
+                shutil.copy2(src_path, dst_path)
 
         # Populate crt-config.h
         crt_config_dir = project_dir / "crt_config"
@@ -464,36 +513,75 @@ class Handler(server.ProjectAPIHandler):
         quiet = str2bool(options.get("quiet"))
         check_idf(quiet=quiet)
         idf_target = options["idf_target"]
+        toolchain = options["toolchain"]
         assert idf_target is not None
-        idf_args = [IDF_CMD, "set-target", idf_target]
+        idf_args = [IDF_CMD]
         env = os.environ.copy()
+        if CCACHE:
+            idf_args += ["--ccache"]
+            env["CCACHE_BASEDIR"] = str(PROJECT_DIR)
+        if toolchain:
+            if toolchain == "llvm":
+                toolchain = "clang"
+            idf_args += ["-D", f"IDF_TOOLCHAIN={toolchain}"]
+
+        idf_args += ["set-target", idf_target]
         check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
 
     def build(self, options):
         debug_print("build")
         quiet = str2bool(options.get("quiet"))
+        toolchain = options["toolchain"]
         check_idf(quiet=quiet)
         if not BUILD_DIR.is_dir():
             self.configure(options)
 
-        idf_args = [IDF_CMD, "build"]
+        idf_args = [IDF_CMD]
+        env = os.environ.copy()
+        if CCACHE:
+            idf_args += ["--ccache"]
+            env["CCACHE_BASEDIR"] = str(PROJECT_DIR)
+        if toolchain:
+            if toolchain == "llvm":
+                toolchain = "clang"
+            idf_args += ["-D", f"IDF_TOOLCHAIN={toolchain}"]
         if options.get("verbose"):
             idf_args.append("-DCMAKE_VERBOSE_MAKEFILE:BOOL=TRUE")
+        idf_args += ["build"]
 
-        check_call(idf_args, cwd=PROJECT_DIR, quiet=quiet)
+        check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
 
     def flash(self, options):
+        debug_print("flash")
         quiet = str2bool(options.get("quiet"))
         check_idf(quiet=quiet)
         idf_target = options["idf_target"]
         assert idf_target is not None
 
         idf_args = [IDF_CMD]
+        env = os.environ.copy()
+        if CCACHE:
+            idf_args += ["--ccache"]
+            env["CCACHE_BASEDIR"] = str(PROJECT_DIR)
         serial_port = options.get("idf_serial_port")
         if serial_port:
             idf_args += ["-p", serial_port]
         idf_args += ["flash"]  # TODO(@PhilippvK): set serial port and baud?
-        check_call(idf_args, cwd=PROJECT_DIR, quiet=quiet)
+        if LOCK:
+            debug_print("if LOCK")
+            self._device_lock = FileLock("/tmp/microtvm_espidf.lock")
+            self._device_lock.acquire()
+            try:
+                debug_print("try")
+                check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
+                debug_print("done")
+            except:
+                debug_print("except")
+                self._device_lock.release()
+                debug_print("released")
+                raise
+        else:
+            check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
 
     def open_transport(self, options):
         debug_print("open_transport")
@@ -506,11 +594,15 @@ class Handler(server.ProjectAPIHandler):
             transport = EspidfWiFiTransport(options)
         else:
             raise ValueError(f"Unsupported transport: {transport}")
+        debug_print("transport", transport)
 
         to_return = transport.open()
         self._transport = transport
+        debug_print("register")
         atexit.register(lambda: self.close_transport())
+        debug_print("registered")
         self._drain_until_rpc_start()
+        debug_print("drained")
         return to_return
 
     def _drain_until_rpc_start(self, timeout=10.0):
@@ -519,7 +611,6 @@ class Handler(server.ProjectAPIHandler):
         hist = b""
         while time.time() < end:
             b = self._transport.read(1, timeout)
-            print("b", b)
             hist += b
             if not b:
                 continue
@@ -529,7 +620,7 @@ class Handler(server.ProjectAPIHandler):
                 self._rx_buffer = b
                 return
 
-        print("hist", hist)
+        print(hist)
         raise RuntimeError("RPC start byte not found")
 
     def close_transport(self):
@@ -541,6 +632,13 @@ class Handler(server.ProjectAPIHandler):
         if self._transport is not None:
             self._transport.close()
             self._transport = None
+        if LOCK:
+            debug_print("if LOCK")
+            if self._device_lock is not None:
+                debug_print("lock exists")
+                self._device_lock.release()
+                debug_print("released")
+                self._device_lock = None
 
     def read_transport(self, n, timeout_sec):
         debug_print("read_transport", n)
@@ -574,7 +672,8 @@ class EspidfSerialTransport:
         flash_runner = "espidf"  # TODO(@PhilippvK): Support standalone esptool as well?
 
         serial_number = options.get("idf_serial_port")
-        return generic_find_serial_port(serial_number=None)
+        print("serial_number", serial_number)
+        return generic_find_serial_port(serial_number=serial_number)
 
         raise RuntimeError(f"Don't know how to deduce serial port for flash runner {flash_runner}")
 
