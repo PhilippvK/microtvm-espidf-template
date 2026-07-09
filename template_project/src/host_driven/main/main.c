@@ -182,6 +182,7 @@ tvm_crt_error_t TVMPlatformGenerateRandom(uint8_t* buffer, size_t num_bytes) {
 // #define CRT_MEMORY_NUM_PAGES 216
 // #define CRT_MEMORY_NUM_PAGES (200 + 40 + 10)
 // #define CRT_MEMORY_NUM_PAGES (200 + 40)
+// TODO: expose
 #define CRT_MEMORY_NUM_PAGES (200 + 20)
 #define CRT_MEMORY_PAGE_SIZE_LOG2 10
 
