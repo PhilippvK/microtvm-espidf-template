@@ -12,6 +12,13 @@ if(EXISTS ${MLF_DIR}/codegen/host/include/)
     list(APPEND TVM_INCS ${MLF_DIR}/codegen/host/include/)
 endif()
 
+if(EXISTS ${CMAKE_SOURCE_DIR}/support)
+    list(APPEND TVM_INCS ${CMAKE_SOURCE_DIR}/support)
+endif()
+if(EXISTS ${CMAKE_SOURCE_DIR}/../support)
+    list(APPEND TVM_INCS ${CMAKE_SOURCE_DIR}/../support)
+endif()
+
 set(EXTRA_SRCS)
 set(EXTRA_COMPONENTS)
 if (CONFIG_MICROTVM_TRANSPORT_MODE_WIFI)
