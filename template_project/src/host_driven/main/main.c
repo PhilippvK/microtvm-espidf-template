@@ -453,3 +453,166 @@ void app_main(void) {
   fflush(stdout);
   esp_restart();
 }
+
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_cpu.h"
+
+#include <tvm/runtime/c_backend_api.h>
+#include <tvm/runtime/c_runtime_api.h>
+
+#define TVM_FREERTOS_NUM_WORKERS 2
+#define TVM_WORKER_STACK_BYTES   4096
+#define TVM_WORKER_PRIORITY      5
+
+typedef struct {
+  atomic_int counters[TVM_FREERTOS_NUM_WORKERS];
+} TVMFreeRTOSBarrier;
+
+typedef struct {
+  FTVMParallelLambda flambda;
+  void* cdata;
+  TVMParallelGroupEnv env;
+
+  TVMFreeRTOSBarrier barrier;
+
+  SemaphoreHandle_t worker_start;
+  SemaphoreHandle_t worker_done;
+
+  volatile int active;
+} TVMFreeRTOSParallelState;
+
+static TVMFreeRTOSParallelState g_tvm_parallel;
+static TaskHandle_t g_tvm_worker_task = NULL;
+static StaticTask_t g_tvm_worker_tcb;
+static StackType_t g_tvm_worker_stack[TVM_WORKER_STACK_BYTES / sizeof(StackType_t)];
+static SemaphoreHandle_t g_worker_start_sem = NULL;
+static SemaphoreHandle_t g_worker_done_sem = NULL;
+static StaticSemaphore_t g_worker_start_buf;
+static StaticSemaphore_t g_worker_done_buf;
+
+static void tvm_worker_main(void* arg) {
+#if CONFIG_IDF_TARGET_ESP32P4
+  enable_esp_pie();
+#endif
+  TVMFreeRTOSParallelState* st = (TVMFreeRTOSParallelState*)arg;
+
+  for (;;) {
+    xSemaphoreTake(st->worker_start, portMAX_DELAY);
+
+    if (st->active) {
+      st->flambda(1, &st->env, st->cdata);
+      xSemaphoreGive(st->worker_done);
+    }
+  }
+}
+
+static void tvm_freertos_parallel_init_once(void) {
+  static bool initialized = false;
+  if (initialized) return;
+
+  g_worker_start_sem = xSemaphoreCreateBinaryStatic(&g_worker_start_buf);
+  g_worker_done_sem = xSemaphoreCreateBinaryStatic(&g_worker_done_buf);
+
+  g_tvm_parallel.worker_start = g_worker_start_sem;
+  g_tvm_parallel.worker_done = g_worker_done_sem;
+  g_tvm_parallel.active = 0;
+
+  g_tvm_worker_task = xTaskCreateStaticPinnedToCore(
+      tvm_worker_main,
+      "tvm_worker1",
+      TVM_WORKER_STACK_BYTES / sizeof(StackType_t),
+      &g_tvm_parallel,
+      TVM_WORKER_PRIORITY,
+      g_tvm_worker_stack,
+      &g_tvm_worker_tcb,
+      1  // core 1
+  );
+
+  configASSERT(g_tvm_worker_task != NULL);
+  initialized = true;
+}
+
+int TVMBackendParallelLaunch(FTVMParallelLambda flambda, void* cdata, int num_task) {
+#if CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
+  TVMParallelGroupEnv env;
+  TVMFreeRTOSBarrier barrier;
+
+  env.num_task = 1;
+  env.sync_handle = &barrier;
+
+  atomic_store(&barrier.counters[0], 0);
+
+  flambda(0, &env, cdata);
+  return 0;
+#else
+  tvm_freertos_parallel_init_once();
+
+  // TVM convention: num_task == 0 means "runtime decides".
+  int ntasks = num_task;
+  if (ntasks <= 0) ntasks = TVM_FREERTOS_NUM_WORKERS;
+  if (ntasks > TVM_FREERTOS_NUM_WORKERS) ntasks = TVM_FREERTOS_NUM_WORKERS;
+
+  if (ntasks == 1) {
+    TVMFreeRTOSBarrier barrier;
+    TVMParallelGroupEnv env;
+
+    env.num_task = 1;
+    env.sync_handle = &barrier;
+
+    atomic_store(&barrier.counters[0], 0);
+
+    flambda(0, &env, cdata);
+    return 0;
+  }
+
+  TVMFreeRTOSParallelState* st = &g_tvm_parallel;
+
+  st->flambda = flambda;
+  st->cdata = cdata;
+  st->env.num_task = ntasks;
+  st->env.sync_handle = &st->barrier;
+
+  for (int i = 0; i < TVM_FREERTOS_NUM_WORKERS; ++i) {
+    atomic_store_explicit(&st->barrier.counters[i], 0, memory_order_relaxed);
+  }
+
+  st->active = 1;
+
+  xSemaphoreGive(st->worker_start);
+
+  // Caller/core 0 handles task 0.
+  flambda(0, &st->env, cdata);
+
+  // Wait for core 1.
+  xSemaphoreTake(st->worker_done, portMAX_DELAY);
+
+  st->active = 0;
+
+  return 0;
+#endif
+}
+
+int TVMBackendParallelBarrier(int task_id, TVMParallelGroupEnv* penv) {
+  TVMFreeRTOSBarrier* barrier = (TVMFreeRTOSBarrier*)penv->sync_handle;
+  int num_task = penv->num_task;
+
+  int old_counter = atomic_fetch_add_explicit(
+      &barrier->counters[task_id], 1, memory_order_release);
+
+  for (int i = 0; i < num_task; ++i) {
+    if (i == task_id) continue;
+
+    while (atomic_load_explicit(&barrier->counters[i], memory_order_relaxed) <= old_counter) {
+      taskYIELD();
+    }
+  }
+
+  atomic_thread_fence(memory_order_acquire);
+  return 0;
+}
