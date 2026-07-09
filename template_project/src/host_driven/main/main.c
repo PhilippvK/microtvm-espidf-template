@@ -59,6 +59,20 @@ static const char* TAG = "microtvm";
 #define CONFIG_LED_PIN_GREEN ((gpio_num_t)4)
 #define CONFIG_LED_PIN_BLUE ((gpio_num_t)5)
 
+#elif CONFIG_IDF_TARGET_ESP32P4
+static inline __attribute__((always_inline))
+void* enable_esp_pie()
+{
+    /* Enable PIE once for all channels */
+    asm volatile (
+        "csrsi  0x7f2, 0b01        \n\t"
+        "li     x29, 0b10          \n\t"
+        "esp.movx.w.cfg x29        \n\t"
+        ::: "x29"
+    );
+    return (void*)0;  // TODO: check if TVM has void return type?
+}
+
 #endif
 
 #ifdef CONFIG_MICROTVM_TRANSPORT_MODE_WIFI
@@ -390,6 +404,9 @@ void app_main(void) {
 
   // The main application loop. We continuously read commands from the UART
   // and dispatch them to MicroTVMRpcServerLoop().
+#if CONFIG_IDF_TARGET_ESP32P4
+  enable_esp_pie();
+#endif
   while (true) {
     uint8_t* data;
     uint8_t* data2;
