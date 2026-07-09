@@ -65,3 +65,6 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
     ${EXTRA_OPTIONS}
     )
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+		-DIDF_BACKEND_PARALLEL_LAUNCH
+)
