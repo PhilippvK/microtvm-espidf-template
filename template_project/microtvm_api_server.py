@@ -202,11 +202,11 @@ def generic_find_serial_port(serial_number=None):
         device_id = ":".join([prop["vid_hex"], prop["pid_hex"]])
         regex = device_id
 
-    print("regex", regex)
+    # print("regex", regex)
     serial_ports = serial.tools.list_ports.grep(regex)
-    print("serial_ports", serial_ports)
+    # print("serial_ports", serial_ports)
     serial_ports = list(serial_ports)
-    print("serial_ports", serial_ports)
+    # print("serial_ports", serial_ports)
 
     # Workaround on MacOS
     if len(serial_ports) > 0:
