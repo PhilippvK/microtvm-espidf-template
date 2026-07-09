@@ -325,6 +325,13 @@ PROJECT_OPTIONS = [
         type="int",
         help="Nunber of labels (including silence & unknown) if project_type is 'micro_kws'",
     ),
+    server.ProjectOption(
+        "support_dir",
+        optional=["generate_project", "build"],
+        default=None,
+        type="str",
+        help="Path to support directory",
+    ),
 ]
 
 
@@ -501,6 +508,16 @@ class Handler(server.ProjectAPIHandler):
         shutil.copytree(
             PROJECT_DIR / "src" / project_type, project_dir, dirs_exist_ok=True
         )
+
+        support_path = project_dir / "support"
+        os.mkdir(support_path)
+        default_support_dir = PROJECT_DIR / "support"
+        if not default_support_dir.is_dir():
+            default_support_dir = None
+        support_dir = options.get("support_dir", default_support_dir)
+        if support_dir is not None:
+            assert pathlib.Path(support_dir).is_dir(), f"Missing: {support_dir}"
+            shutil.copytree(support_dir, support_path, dirs_exist_ok=True)
 
         self._create_prj_conf(project_dir, options)
 
