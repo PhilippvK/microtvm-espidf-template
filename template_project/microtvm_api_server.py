@@ -689,7 +689,6 @@ class EspidfSerialTransport:
         flash_runner = "espidf"  # TODO(@PhilippvK): Support standalone esptool as well?
 
         serial_number = options.get("idf_serial_port")
-        print("serial_number", serial_number)
         return generic_find_serial_port(serial_number=serial_number)
 
         raise RuntimeError(f"Don't know how to deduce serial port for flash runner {flash_runner}")
