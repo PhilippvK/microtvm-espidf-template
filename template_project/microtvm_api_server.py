@@ -48,8 +48,8 @@ import yaml
 
 from tvm.micro.project_api import server
 
-
 _LOG = logging.getLogger(__name__)
+
 
 def str2bool(value, allow_none=False):
     if value is None:
@@ -60,6 +60,7 @@ def str2bool(value, allow_none=False):
 
 PRINT = str2bool(os.environ.get("MICROTVM_API_PRINT", False))
 _LOG.setLevel(logging.INFO if PRINT else logging.WARNING)
+
 
 def check_call(cmd_args, *args, quiet: bool = True, **kwargs):
     cwd_str = "" if "cwd" not in kwargs else f" (in cwd: {kwargs['cwd']})"
@@ -83,6 +84,7 @@ def check_output(cmd_args, *args, **kwargs):
 def debug_print(*args, **kwargs):
     if PRINT:
         print(*args, **kwargs)
+
 
 DBG = str2bool(os.environ.get("MICROTVM_API_DBG", False))
 
@@ -110,8 +112,14 @@ WIFI_HOST = os.environ.get("MICROTVM_WIFI_HOST", "192.168.4.1")
 CCACHE = str2bool(os.environ.get("CCACHE", True))
 LOCK = str2bool(os.environ.get("LOCK", True))
 
-if LOCK:
-    from filelock import FileLock
+DEVICE_LOCK_TIMEOUT_SEC = float(
+    os.environ.get(
+        "MICROTVM_DEVICE_LOCK_TIMEOUT_SEC",
+        "120",
+    )
+)
+
+from filelock import FileLock
 
 # Data structure to hold the information microtvm_api_server.py needs
 # to communicate with each of these boards.
@@ -210,9 +218,7 @@ def generic_find_serial_port(serial_number=None):
 
     # Workaround on MacOS
     if len(serial_ports) > 0:
-        serial_ports = list(
-            filter(lambda x: "wch" not in x.name and "SLAB" not in x.name, serial_ports)
-        )
+        serial_ports = list(filter(lambda x: "wch" not in x.name and "SLAB" not in x.name, serial_ports))
 
     if len(serial_ports) == 0:
         raise Exception(f"No serial port found for board {prop['board']}!")
@@ -346,19 +352,98 @@ class Handler(server.ProjectAPIHandler):
         super(Handler, self).__init__()
         self._proc = None
         self._rx_buffer = None
+        self._transport = None
+        self._device_lock = None
         if DBG:
             self.elfdest = tempfile.mkstemp(dir="/tmp/elfs")[1]
             self.outputs = b""
-        if LOCK:
-            self.device_lock = None
+
+    def _acquire_device_lock(self, timeout=None):
+        if not LOCK:
+            return
+
+        if getattr(self, "_device_lock", None) is not None:
+            # We already own it.
+            return
+
+        lock = FileLock("/tmp/microtvm_espidf.lock")
+
+        try:
+            if timeout is None:
+                lock.acquire()
+            else:
+                lock.acquire(timeout=timeout)
+        except Exception:
+            # Don't leave a half-initialized lock object around.
+            try:
+                lock.release()
+            except Exception:
+                pass
+            raise
+
+        self._device_lock = lock
+
+        debug_print(
+            "acquired device lock",
+            os.getpid(),
+        )
+
+    def _release_device_lock(self):
+        if not LOCK:
+            return
+
+        lock = getattr(
+            self,
+            "_device_lock",
+            None,
+        )
+
+        if lock is None:
+            return
+
+        # Clear first so repeated cleanup is harmless.
+        self._device_lock = None
+
+        try:
+            lock.release()
+        except Exception as err:
+            _LOG.warning(
+                "Failed to release microTVM device lock: %s",
+                err,
+            )
+
+        debug_print(
+            "released device lock",
+            os.getpid(),
+        )
+
+    def _close_transport_and_release(self):
+        transport = getattr(
+            self,
+            "_transport",
+            None,
+        )
+
+        # Clear first; cleanup should be idempotent.
+        self._transport = None
+
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception as err:
+                _LOG.warning(
+                    "Failed to close microTVM transport: %s",
+                    err,
+                )
+
+        self._rx_buffer = None
+        self._release_device_lock()
 
     def server_info_query(self, tvm_version):
         return server.ServerInfo(
             platform_name="espidf",
             is_template=IS_TEMPLATE,
-            model_library_format_path=""
-            if IS_TEMPLATE
-            else (PROJECT_DIR / MODEL_LIBRARY_FORMAT_RELPATH),
+            model_library_format_path="" if IS_TEMPLATE else (PROJECT_DIR / MODEL_LIBRARY_FORMAT_RELPATH),
             project_options=PROJECT_OPTIONS,
         )
 
@@ -437,7 +522,6 @@ class Handler(server.ProjectAPIHandler):
 
             f.write("\n")
 
-
     def _get_platform_version(self, quiet: bool = False) -> str:
         check_idf()
         idf_args = [IDF_CMD, "--version"]
@@ -498,16 +582,12 @@ class Handler(server.ProjectAPIHandler):
         # Populate crt-config.h
         crt_config_dir = project_dir / "crt_config"
         crt_config_dir.mkdir()
-        shutil.copy2(
-            PROJECT_DIR / "crt_config" / "crt_config.h", crt_config_dir / "crt_config.h"
-        )
+        shutil.copy2(PROJECT_DIR / "crt_config" / "crt_config.h", crt_config_dir / "crt_config.h")
 
         # Populate src/
         project_type = options["project_type"]
         assert project_type is not None
-        shutil.copytree(
-            PROJECT_DIR / "src" / project_type, project_dir, dirs_exist_ok=True
-        )
+        shutil.copytree(PROJECT_DIR / "src" / project_type, project_dir, dirs_exist_ok=True)
 
         support_path = project_dir / "support"
         os.mkdir(support_path)
@@ -584,21 +664,42 @@ class Handler(server.ProjectAPIHandler):
         if serial_port:
             idf_args += ["-p", serial_port]
         idf_args += ["flash"]  # TODO(@PhilippvK): set serial port and baud?
-        if LOCK:
-            debug_print("if LOCK")
-            self._device_lock = FileLock("/tmp/microtvm_espidf.lock")
-            self._device_lock.acquire()
-            try:
-                debug_print("try")
-                check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
-                debug_print("done")
-            except:
-                debug_print("except")
-                self._device_lock.release()
-                debug_print("released")
-                raise
-        else:
-            check_call(idf_args, cwd=PROJECT_DIR, env=env, quiet=quiet)
+        if not LOCK:
+            check_call(
+                idf_args,
+                cwd=PROJECT_DIR,
+                env=env,
+                quiet=quiet,
+            )
+            return
+
+        print(
+            "[microTVM] waiting for device lock",
+            "pid=",
+            os.getpid(),
+            flush=True,
+        )
+
+        self._acquire_device_lock(timeout=DEVICE_LOCK_TIMEOUT_SEC)
+
+        print(
+            "[microTVM] acquired device lock",
+            "pid=",
+            os.getpid(),
+            flush=True,
+        )
+
+        try:
+            check_call(
+                idf_args,
+                cwd=PROJECT_DIR,
+                env=env,
+                quiet=quiet,
+            )
+        except Exception:
+            # Flash failed: this session never owns a usable board.
+            self._close_transport_and_release()
+            raise
 
     def open_transport(self, options):
         debug_print("open_transport")
@@ -613,34 +714,86 @@ class Handler(server.ProjectAPIHandler):
             raise ValueError(f"Unsupported transport: {transport}")
         debug_print("transport", transport)
 
-        to_return = transport.open()
-        self._transport = transport
-        debug_print("register")
-        atexit.register(lambda: self.close_transport())
-        debug_print("registered")
-        self._drain_until_rpc_start()
-        debug_print("drained")
-        return to_return
+        try:
+            # Normally flash() already acquired the lock.
+            # This also makes open_transport safe if called independently.
+            print(
+                "[microTVM] waiting for device lock 2",
+                "pid=",
+                os.getpid(),
+                flush=True,
+            )
+
+            self._acquire_device_lock(timeout=DEVICE_LOCK_TIMEOUT_SEC)
+
+            print(
+                "[microTVM] acquired device lock 2",
+                "pid=",
+                os.getpid(),
+                flush=True,
+            )
+
+            to_return = transport.open()
+
+            # Assign immediately so cleanup sees it.
+            self._transport = transport
+            debug_print("register")
+            atexit.register(lambda: self.close_transport())
+            debug_print("registered")
+
+            self._drain_until_rpc_start()
+
+            return to_return
+
+        except Exception:
+            # Critical:
+            # failed startup must not leave another worker blocked forever.
+            try:
+                transport.close()
+            except Exception:
+                pass
+
+            self._transport = None
+            self._rx_buffer = None
+            self._release_device_lock()
+
+            raise
 
     def _drain_until_rpc_start(self, timeout=10.0):
         debug_print("_drain_until_rpc_start")
-        end = time.time() + timeout
+        deadline = time.monotonic() + timeout
         hist = b""
-        while time.time() < end:
+        while True:
+            remaining = deadline - time.monotonic()
+
+            if remaining <= 0:
+                break
             b = self._transport.read(1, timeout)
             hist += b
             if not b:
                 continue
 
-            if b == b'\xfe':
+            if b == b"\xfe":
                 # push back into buffer
                 self._rx_buffer = b
                 return
 
-        print(hist)
+        print(
+            "RPC startup bytes:",
+            hist,
+            flush=True,
+        )
         raise RuntimeError("RPC start byte not found")
 
     def close_transport(self):
+        print(
+            "[microTVM] close_transport",
+            "pid=",
+            os.getpid(),
+            "time=",
+            time.time(),
+            flush=True,
+        )
         debug_print("close_transport")
         if DBG:
             outfile = str(self.elfdest) + ".out"
@@ -649,13 +802,7 @@ class Handler(server.ProjectAPIHandler):
         if self._transport is not None:
             self._transport.close()
             self._transport = None
-        if LOCK:
-            debug_print("if LOCK")
-            if self._device_lock is not None:
-                debug_print("lock exists")
-                self._device_lock.release()
-                debug_print("released")
-                self._device_lock = None
+        self._close_transport_and_release()
 
     def read_transport(self, n, timeout_sec):
         debug_print("read_transport", n)
@@ -682,6 +829,7 @@ class Handler(server.ProjectAPIHandler):
 
 
 # TODO: add abstract class
+
 
 class EspidfSerialTransport:
     @classmethod
@@ -750,6 +898,7 @@ class EspidfSerialTransport:
 
 
 import socket
+
 
 class EspidfWiFiTransport:
 
